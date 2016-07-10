@@ -142,6 +142,7 @@ Syntax: cpplint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...]
       filter=+filter1,-filter2,...
       exclude_files=regex
       linelength=80
+      root=subdir
 
     "set noparent" option prevents cpplint from traversing directory tree
     upwards looking for more .cfg files in parent directories. This option
@@ -156,6 +157,9 @@ Syntax: cpplint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...]
     through liner.
 
     "linelength" allows to specify the allowed line length for the project.
+
+    The "root" option is similar in function to the --root flag (see example
+    above).
 
     CPPLINT.cfg has an effect on files in the same directory and all
     sub-directories, unless overridden by a nested configuration file.
@@ -526,7 +530,7 @@ _root = None
 
 # The allowed line length of files.
 # This is set by --linelength flag.
-_line_length = 80
+_line_length = 120
 
 # The allowed extensions for file names
 # This is set by --extensions flag.
@@ -1746,7 +1750,12 @@ def GetHeaderGuardCPPVariable(filename):
   fileinfo = FileInfo(filename)
   file_path_from_root = fileinfo.RepositoryName()
   if _root:
-    file_path_from_root = re.sub('^' + _root + os.sep, '', file_path_from_root)
+    suffix = os.sep
+    # On Windows using directory separator will leave us with
+    # "bogus escape error" unless we properly escape regex.
+    if suffix == '\\':
+      suffix += '\\'
+    file_path_from_root = re.sub('^' + _root + suffix, '', file_path_from_root)
   return re.sub(r'[^a-zA-Z0-9]', '_', file_path_from_root).upper() + '_'
 
 
@@ -3642,6 +3651,7 @@ def CheckBraces(filename, clean_lines, linenum, error):
 
   line = clean_lines.elided[linenum]        # get rid of comments and strings
 
+  """
   if Match(r'\s*{\s*$', line):
     # We allow an open brace to start a line in the case where someone is using
     # braces in a block to explicitly create a new scope, which is commonly used
@@ -3658,14 +3668,19 @@ def CheckBraces(filename, clean_lines, linenum, error):
         not (GetLineWidth(prevline) > _line_length - 2 and '[]' in prevline)):
       error(filename, linenum, 'whitespace/braces', 4,
             '{ should almost always be at the end of the previous line')
-
+  """
+  if (Search(r'\)\s*{', line) or 
+      Search(r'\belse\s*{', line)):
+        error(filename, linenum, 'whitespace/braces', 4, 
+                '{ should almost always be placed on a new line')    
+  """
   # An else clause should be on the same line as the preceding closing brace.
   if Match(r'\s*else\b\s*(?:if\b|\{|$)', line):
     prevline = GetPreviousNonBlankLine(clean_lines, linenum)[0]
     if Match(r'\s*}\s*$', prevline):
       error(filename, linenum, 'whitespace/newline', 4,
             'An else should appear on the same line as the preceding }')
-
+  
   # If braces come on one side of an else, they should be on both.
   # However, we have to worry about "else if" that spans multiple lines!
   if Search(r'else if\s*\(', line):       # could be multi-line if
@@ -3682,7 +3697,7 @@ def CheckBraces(filename, clean_lines, linenum, error):
   elif Search(r'}\s*else[^{]*$', line) or Match(r'[^}]*else\s*{', line):
     error(filename, linenum, 'readability/braces', 5,
           'If an else has a brace on one side, it should have it on both')
-
+  
   # Likewise, an else should never have the else clause on the same line
   if Search(r'\belse [^\s{]', line) and not Search(r'\belse if\b', line):
     error(filename, linenum, 'whitespace/newline', 4,
@@ -3692,7 +3707,7 @@ def CheckBraces(filename, clean_lines, linenum, error):
   if Match(r'\s*do [^\s{]', line):
     error(filename, linenum, 'whitespace/newline', 4,
           'do/while clauses should not be on a single line')
-
+  
   # Check single-line if/else bodies. The style guide says 'curly braces are not
   # required for single-line statements'. We additionally allow multi-line,
   # single statements, but we reject anything with more than one semicolon in
@@ -3747,7 +3762,7 @@ def CheckBraces(filename, clean_lines, linenum, error):
           elif next_indent > if_indent:
             error(filename, linenum, 'readability/braces', 4,
                   'If/else bodies with multiple statements require braces')
-
+  """
 
 def CheckTrailingSemicolon(filename, clean_lines, linenum, error):
   """Looks for redundant trailing semicolon.
@@ -3884,6 +3899,14 @@ def CheckTrailingSemicolon(filename, clean_lines, linenum, error):
       # outputting warnings for the matching closing brace, if there are
       # nested blocks with trailing semicolons, we will get the error
       # messages in reversed order.
+
+      # We need to check the line forward for NOLINT
+      raw_lines = clean_lines.raw_lines
+      ParseNolintSuppressions(filename, raw_lines[endlinenum-1], endlinenum-1,
+                              error)
+      ParseNolintSuppressions(filename, raw_lines[endlinenum], endlinenum,
+                              error)
+
       error(filename, endlinenum, 'readability/braces', 4,
             "You don't need a ; after a }")
 
@@ -4240,17 +4263,18 @@ def CheckStyle(filename, clean_lines, linenum, file_extension, nesting_state,
   # (of lines ending in double quotes, commas, equals, or angle brackets)
   # because the rules for how to indent those are non-trivial.
   if (not Search(r'[",=><] *$', prev) and
-      (initial_spaces == 1 or initial_spaces == 3) and
+      (initial_spaces%4 != 0) and
       not Match(scope_or_label_pattern, cleansed_line) and
       not (clean_lines.raw_lines[linenum] != line and
            Match(r'^\s*""', line))):
     error(filename, linenum, 'whitespace/indent', 3,
           'Weird number of spaces at line-start.  '
-          'Are you using a 2-space indent?')
-
+          'Are you using a 4-space indent?')
+  """
   if line and line[-1].isspace():
     error(filename, linenum, 'whitespace/end_of_line', 4,
           'Line ends in whitespace.  Consider deleting these extra spaces.')
+  """
 
   # Check if the line is a header guard.
   is_header_guard = False
@@ -4286,14 +4310,14 @@ def CheckStyle(filename, clean_lines, linenum, file_extension, nesting_state,
       not ((cleansed_line.find('case ') != -1 or
             cleansed_line.find('default:') != -1) and
            cleansed_line.find('break;') != -1)):
-    error(filename, linenum, 'whitespace/newline', 0,
+    error(filename, linenum, 'whitespace/newline', 3,
           'More than one command on the same line')
 
   # Some more style checks
   CheckBraces(filename, clean_lines, linenum, error)
-  CheckTrailingSemicolon(filename, clean_lines, linenum, error)
-  CheckEmptyBlockBody(filename, clean_lines, linenum, error)
-  CheckAccess(filename, clean_lines, linenum, nesting_state, error)
+  # CheckTrailingSemicolon(filename, clean_lines, linenum, error)
+  # CheckEmptyBlockBody(filename, clean_lines, linenum, error)
+  # CheckAccess(filename, clean_lines, linenum, nesting_state, error)
   CheckSpacing(filename, clean_lines, linenum, nesting_state, error)
   CheckOperatorSpacing(filename, clean_lines, linenum, error)
   CheckParenthesisSpacing(filename, clean_lines, linenum, error)
@@ -5673,11 +5697,13 @@ def ProcessLine(filename, file_extension, clean_lines, line,
   raw_lines = clean_lines.raw_lines
   ParseNolintSuppressions(filename, raw_lines[line], line, error)
   nesting_state.Update(filename, clean_lines, line, error)
+  """
   CheckForNamespaceIndentation(filename, nesting_state, clean_lines, line,
                                error)
+  """
   if nesting_state.InAsmBlock(): return
-  CheckForFunctionLengths(filename, clean_lines, line, function_state, error)
-  CheckForMultilineCommentsAndStrings(filename, clean_lines, line, error)
+  # CheckForFunctionLengths(filename, clean_lines, line, function_state, error)  
+  # CheckForMultilineCommentsAndStrings(filename, clean_lines, line, error)
   CheckStyle(filename, clean_lines, line, file_extension, nesting_state, error)
   CheckLanguage(filename, clean_lines, line, file_extension, include_state,
                 nesting_state, error)
@@ -5788,32 +5814,36 @@ def ProcessFileData(filename, file_extension, lines, error,
 
   ResetNolintSuppressions()
 
-  CheckForCopyright(filename, lines, error)
+  # CheckForCopyright(filename, lines, error)
   ProcessGlobalSuppresions(lines)
   RemoveMultiLineComments(filename, lines, error)
   clean_lines = CleansedLines(lines)
 
+  """
   if file_extension == 'h':
     CheckForHeaderGuard(filename, clean_lines, error)
+  """
 
   for line in xrange(clean_lines.NumLines()):
     ProcessLine(filename, file_extension, clean_lines, line,
                 include_state, function_state, nesting_state, error,
                 extra_check_functions)
-    FlagCxx11Features(filename, clean_lines, line, error)
-  nesting_state.CheckCompletedBlocks(filename, error)
+    # FlagCxx11Features(filename, clean_lines, line, error)
+  # nesting_state.CheckCompletedBlocks(filename, error)
 
-  CheckForIncludeWhatYouUse(filename, clean_lines, include_state, error)
+  # CheckForIncludeWhatYouUse(filename, clean_lines, include_state, error)
 
+  """
   # Check that the .cc file has included its header if it exists.
   if _IsSourceExtension(file_extension):
     CheckHeaderFileIncluded(filename, include_state, error)
+  """
 
   # We check here rather than inside ProcessLine so that we see raw
   # lines rather than "cleaned" lines.
-  CheckForBadCharacters(filename, lines, error)
+  # CheckForBadCharacters(filename, lines, error)
 
-  CheckForNewlineAtEOF(filename, lines, error)
+  # CheckForNewlineAtEOF(filename, lines, error)
 
 def ProcessConfigOverrides(filename):
   """ Loads the configuration files and processes the config overrides.
@@ -5873,6 +5903,9 @@ def ProcessConfigOverrides(filename):
                 _line_length = int(val)
             except ValueError:
                 sys.stderr.write('Line length must be numeric.')
+          elif name == 'root':
+            global _root
+            _root = val
           else:
             sys.stderr.write(
                 'Invalid configuration option (%s) in file %s\n' %
